@@ -4,18 +4,26 @@ require 'sinatra'
 require 'json'
 require 'cgi'
 require 'active_record'
+require 'net/https'
 
 ActiveRecord::Base.establish_connection(
  :adapter => "mysql",
  :host => "localhost",
  :database => "osu_events",
- :password => "tarun123"
+ :password => "tarun123",
+ :pool => 8
 )
 
 class Event_Details < ActiveRecord::Base
 end
 
 class Users < ActiveRecord::Base
+end
+
+class Categories < ActiveRecord::Base
+end
+
+class Fb_User_Connections < ActiveRecord::Base
 end
 
 get '/' do
@@ -69,27 +77,82 @@ end
 get '/get_events' do
     num_events = params[:num_events]
     last_event_id = params[:last_event_id]
+    category_id = params[:category_id]
+
     if (num_events.nil?) 
         num_events = 50
     end
+    
     if (last_event_id.nil?)
-        events = Event_Details.find(:all,:select => ["event_id", "name", "location", "start_date", "end_date", "category"], 
-                                    :limit => num_events, :order => "event_id", :conditions => ["start_date >= ?", Date.today])
-        if (events.nil?)
-            return {"result" => {"status" => false, "data" => nil }}.to_json
+        if (category_id.nil?)
+            events = Event_Details.find(:all,:select => ["event_id", "name", "location", "start_date", "end_date", "category"], 
+                           :limit => num_events, :order => "event_id", :conditions => ["start_date >= ?", Date.today])
         else
-            return {"result" => {"status" => true, "data" => events }}.to_json
+            events = Event_Details.find(:all,:select => ["event_id", "name", "location", "start_date", "end_date", "category"], 
+                           :limit => num_events, :order => "event_id", :conditions => ["start_date >= ? AND category = ?", Date.today, category_id])
         end
     else
-        events = Event_Details.find(:all, :select => ["event_id", "name", "location", "start_date", "end_date", "category"], 
-                                    :limit => num_events, :order => "event_id", :conditions => ["start_date >= ? AND event_id > ?", Date.today, last_event_id])
-        if (events.nil?)
-            return {"result" => {"status" => false, "data" => nil }}.to_json
+        if (category_id.nil?)    
+            events = Event_Details.find(:all, :select => ["event_id", "name", "location", "start_date", "end_date", "category"], 
+                           :limit => num_events, :order => "event_id", :conditions => ["start_date >= ? AND event_id > ?", Date.today, last_event_id])
         else
-            return {"result" => {"status" => true, "data" => events }}.to_json
+            events = Event_Details.find(:all, :select => ["event_id", "name", "location", "start_date", "end_date", "category"], 
+                           :limit => num_events, :order => "event_id", :conditions => ["start_date >= ? AND event_id > ? AND category = ?", Date.today, last_event_id,  category_id])
         end
-
     end
+    
+    if (events.nil?)
+            return {"result" => {"status" => false, "data" => nil }}.to_json
+    else
+        events_array = []
+        events.map{ |e| 
+            event = Hash.new()
+            event["id"] = e.event_id
+            event["name"] = e.name
+            event["location"] = e.location
+            event["start_date"] = e.start_date
+            event["end_date"] = e.end_date
+            event["category"] = e.category
+            events_array.push(event)
+        }
+        return {"result" => {"status" => true, "data" => events_array }}.to_json
+    end
+
 end
 
+get '/get_event_categories' do
+    categories = Category.find(:all)
+    if (categories.nil?)
+        return {"result" => {"status" => false, "data" => nil }}.to_json
+    else
+        category_array = []
+        categories.map{ |c| 
+            category = Hash.new()
+            category["id"] = c.category_id
+            category["name"] = c.category_title
+            category_array.push(category)
+        }
+        return {"result" => {"status" => true, "data" =>  category_array}}.to_json
+    end 
+end
 
+get '/fb' do
+    http = Net::HTTP.new('graph.facebook.com', 443)
+    http.use_ssl = true
+    user_id = 513858558
+    #path = '/885010384/friends?access_token=AAAFMmFSEZCykBANAOfZAUQlG0Vh4QKrjLRqIYfUPLTOF1MZCYbgsfU3666rCZAGCpatT3y4rI6nVhDU40ESejQZBPe8iUjZCOZAppteBCZC7ewZDZD'
+    #path = '/692740909/friends?access_token=AAAFMmFSEZCykBALp1ifcvYc18nnlHtkCKPivyhYeVuYRF61XG0mHbwL67PzsZBIa6ccsXZCt7N0wK1jaMBRDQjASRZCZBQ6mIzfK0oPkcWAZDZD'
+    path = '/513858558/friends?access_token=AAAFMmFSEZCykBAFwrKMPbQl4kj0Lb5nRXeRqobntaWBCZBbhBP9GPlmdENxJvdJ5OwuvrNsTWi5K9gCp0i4YeOrv3BBG5ZBLquZAUrxo6AZDZD'
+# 692740909 vinnet AAAFMmFSEZCykBALp1ifcvYc18nnlHtkCKPivyhYeVuYRF61XG0mHbwL67PzsZBIa6ccsXZCt7N0wK1jaMBRDQjASRZCZBQ6mIzfK0oPkcWAZDZD
+#access_token=AAAFMmFSEZCykBAFwrKMPbQl4kj0Lb5nRXeRqobntaWBCZBbhBP9GPlmdENxJvdJ5OwuvrNsTWi5K9gCp0i4YeOrv3BBG5ZBLquZAUrxo6AZDZD&expires_in=6630
+    # GET request -> so the host can set his cookies
+    resp, data = http.get(path, nil)
+    #puts data
+    res = JSON.parse(data)
+    res["data"].map { |v| 
+        Fb_User_Connections.create(:fb_id => user_id, :fb_friend_id =>  v["id"])
+    }
+    return data
+end
+
+ActiveRecord::Base.connection.close
